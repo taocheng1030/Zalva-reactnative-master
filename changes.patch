@@ -1,0 +1,207 @@
+diff --git a/src/containers/traveling/index.js b/src/containers/traveling/index.js
+index 1e2278e..abcf043 100644
+--- a/src/containers/traveling/index.js
++++ b/src/containers/traveling/index.js
+@@ -17,6 +17,7 @@ import tripService from 'services/tripService';
+ 
+ /* Utils */
+ import Cache from 'utils/cache';
++import UtilService from 'utils/util';
+ 
+ class Traveling extends PureComponent {
+     constructor(props) {
+@@ -30,6 +31,10 @@ class Traveling extends PureComponent {
+ 
+     async componentDidMount() {
+         this.mounted = true;
++        const { trip } = this.state;
++
++        this._initConnection(trip.driver.id);
++
+         //handle Notifications
+         this._notificationSubscription = Notifications.addListener(this._handleNotification);
+     }
+@@ -40,6 +45,74 @@ class Traveling extends PureComponent {
+         }
+     };
+ 
++    _initConnection(channel) {
++        UtilService.getWebSocketConnection(channel, (err, con) => {
++            if (err) {
++                console.log("connection error:", err)
++                return;
++            }
++            this.connection = con
++            this._subscribeSocket(channel);
++        })
++    }
++
++    _sendMessage(msg) {
++        if (this.subscription == null) return
++        this.subscription.publish(msg).then(() => {
++            // success ack from Centrifugo received
++            console.log("publish success: ", this.subscription);
++        }, (err) => {
++            // publish call failed with error
++            console.log("publish error: ", err);
++        });
++    }
++
++    _disconnect() {
++        if (this.subscription) {
++            this.subscription.unsubscribe();
++        }
++        if (this.connection) {
++            this.connection.disconnect();
++            this.connection = null;
++        }
++    }
++
++    _subscribeSocket(channel) {
++        var callbacks = {
++            "message": (message) => {
++                // See below description of message format
++                //this.setCarPosition(JSON.parse(message.data))
++                console.log('getting data from centrifuge');
++                console.log(JSON.parse(message.data))
++            },
++            "join": (message) => {
++                // See below description of join message format
++                console.log("join", message);
++            },
++            "leave": (message) => {
++                // See below description of leave message format
++                console.log("leave", message);
++            },
++            "subscribe": (context) => {
++                // See below description of subscribe callback context format
++                console.log("subscribe", context);
++            },
++            "error": (errContext) => {
++                // See below description of subscribe error callback context format
++                console.log("error", err);
++            },
++            "unsubscribe": (context) => {
++                // See below description of unsubscribe event callback context format
++                console.log("unsubscribe", context);
++            },
++            "presence": (message) => {
++                console.log("message", message);
++            }
++        }
++
++        this.subscription = this.connection.subscribe("public:" + channel, callbacks)
++    }
++
+     componentWillMount() {
+         
+     }
+diff --git a/src/storage/location.js b/src/storage/location.js
+index 749499e..bee9b7e 100644
+--- a/src/storage/location.js
++++ b/src/storage/location.js
+@@ -77,7 +77,6 @@ export async function deleteFromLocation() {
+     }
+ }
+ 
+-
+ export async function getPlaces() {
+   try {
+     const result = await places.get('places');
+@@ -105,46 +104,4 @@ export async function setPlaces(locations) {
+     doc.places = nearbyPlaces;
+     return doc;
+   });
+-}
+-
+-// export async function setPlaces(places) {
+-//   let nearbyPlaces = [];
+-//   for (var i=0; i < places.length; i++) {
+-//     let location = await createPlace(places[i]);
+-//     nearbyPlaces.push(location);
+-//   }
+-//   return await places.bulkDocs(nearbyPlaces);
+-// }
+-
+-async function createPlace(location) {
+-  var place = {
+-    _id: new Date().toISOString(),
+-    name: location.name,
+-    place_id: location.place_id,
+-    location: location.geometry.location
+-  };
+-  return place;
+-}
+-
+-export async function deletePlaces() {
+-  try {
+-    var doc      = await locations.get('places');
+-    var response = await locations.remove(doc);
+-    return response;
+-  } catch (err) {
+-    console.log('Error ', err);
+-  }
+-}
+-
+-// export async function deletePlaces() {
+-//   try {
+-//     var results = await getPlaces();
+-//     results = results.map(r => {
+-//       r._deleted = true;
+-//       return r;
+-//     });
+-//     await places.bulkDocs(results);
+-//   } catch (err) {
+-//     console.log(err);
+-//   }
+-// }
+\ No newline at end of file
++}
+\ No newline at end of file
+diff --git a/src/utils/util.js b/src/utils/util.js
+index a75d6bf..500335e 100644
+--- a/src/utils/util.js
++++ b/src/utils/util.js
+@@ -2,6 +2,10 @@ import {
+     AsyncStorage
+ } from 'react-native';
+ 
++import * as Config from '../config';
++import Cache from 'utils/cache';
++import Centrifuge from 'centrifuge';
++
+ class UtilService {
+ 
+     static getFullname(obj) {
+@@ -51,6 +55,30 @@ class UtilService {
+     static showRatingUser(rating) {
+         return rating.toFixed(1);
+     }
++
++    static getWebSocketConnection(userId, cb) {
++        
++        var token = Cache.currentUser['token'];
++
++        Cache.socketConnection = new Centrifuge(Config.WS_CENTRIFUGO);
++        Cache.socketConnection.setToken(token);
++        Cache.socketConnection.connect();
++        
++        Cache.socketConnection.on('error', function (error) {
++            // handle error in a way you want, here we just log it into browser console.
++            cb(error, null);
++        });
++
++        Cache.socketConnection.on('disconnect', function (context) {
++            // do whatever you need in case of disconnect from server
++            cb(context, null);
++        });
++
++        Cache.socketConnection.on('connect', (context) => {
++            //console.log('WS - connect', context)
++            cb(null, Cache.socketConnection);
++        });
++    }
+ }
+ 
+ export default UtilService;
+\ No newline at end of file
